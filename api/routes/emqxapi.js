@@ -5,6 +5,7 @@ const colors = require('colors');
 
 //models import
 import Resource from '../models/emqx_resource.js';
+import EmqxRule from '../models/emqx_rule.js';
 
 global.saverResource = null;
 global.alarmResource = null;
@@ -16,53 +17,104 @@ const auth = {
     }
 };
 
-
 async function callapi() {
     const url = "http://localhost:8085/api/v4/rules";
     const res = await axios.get(url, auth);
     console.log(res.data);
 }
 
-async function createRule(type,devUsId) {
+async function createUpdateSaverRule(dId, status) {
 
-    const url = "http://localhost:8085/api/v4/rules";
+    //search for existing rule in mongo db- buscamos si hay una regla previa en mongo
+    const rule = await EmqxRule.findOne({ dId: dId });
 
-    var rule = null;
+    if (!rule) {
 
-    if (type == "saver"){
-        rule   = {
-            rawsql: "SELECT payload as msg, topic as topic FROM  \"did/sdata\" WHERE msg.save = 1",
-            actions: [{
-                name: "data_to_webserver",
-                params: {
-                    $resource: global.saverResource.id,
-                    payload_tmpl: ""
-                }
-            }],
-            description: "test-rule"
+        try {
+            const url = "http://localhost:8085/api/v4/rules";
+
+            const topic = dId + "/sdata";
+
+            //new rule -- preparamos nueva regla
+            var newRule = {
+                rawsql: "SELECT payload as msg, topic as topic FROM \"" + topic + "\" WHERE msg.save = 1",
+                actions: [{
+                    name: "data_to_webserver",
+                    params: {
+                        $resource: global.saverResource.id, 
+                        payload_tmpl: ""
+                    }
+                }],
+                description: topic,
+                enabled: status
+            } 
+
+            //save rule in emqx - grabamos la regla en emques
+            const res = await axios.post(url, newRule, auth);
+
+            if (res.data.data) {
+
+                //save rule in mongo -- grabamos regla en mongo
+                EmqxRule.create({
+                    dId: dId,
+                    rawsql: res.data.data.rawsql,
+                    id: res.data.data.id,
+                    description: res.data.data.description,
+                    type: "saver"
+                });
+
+                console.log("New Saver Rule Created...".green);
+                return "success";
+            }else{
+                console.log("Error creating emqx saver rule")
+                return "error";
+            }
+        } catch (error) {
+            console.log(error);
+            return "error";
         }
+
+    }else{
+
+        // if rule already exists, update status rule  - si la regla existe actualizamos el estado de regla
+        const url = "http://localhost:8085/api/v4/rules/" + rule.id;
+
+        var newRule = {
+            enabled: status
+        } 
+
+        const res = await axios.put(url, newRule ,auth);
+        return "updated"
+
     }
 
-    if (type == "alarm"){
-
-    }
-
-
-    const res = await axios.post(url, rule, auth);
-
-    console.log(res.data);
 
 }
 
-setTimeout(() => {
-    createRule("saver","")
-}, 2000);
+
+
+router.get('/updateCreateRule', async (req, res) => {
+
+
+    var response = await createUpdateSaverRule("did", true);
+
+    const r = {
+        status: response,
+    }
+
+    return res.json(r)
+
+});
+
+
+
 
 router.post('/saver-webhook', async (req, res) => {
 
 
     var msg = (JSON.parse(req.body.msg))
-    console.log(req.body)
+    console.log(req.headers.token);
+
     const response = {
         status: "success",
     }
@@ -141,6 +193,9 @@ async function listResources() {
         });
 
         console.log("***** Emqx webhooks resources count ok! *****".green);
+
+ 
+
     } else {
 
         function printWarning() {
@@ -152,7 +207,7 @@ async function listResources() {
 
         printWarning();
 
-    } 
+    }
 
 }
 
