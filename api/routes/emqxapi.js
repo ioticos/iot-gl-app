@@ -17,23 +17,72 @@ const auth = {
     }
 };
 
-async function callapi() {
-    const url = "http://localhost:8085/api/v4/rules";
-    const res = await axios.get(url, auth);
-    console.log(res.data);
+
+
+// We can solve this by creating our own asyncForEach() method:
+// thanks to Sebastien Chopin - Nuxt Creator :)
+// https://codeburst.io/javascript-async-await-with-foreach-b6ba62bbf404
+
+async function asyncForEach(array, callback) {
+    for (let index = 0; index < array.length; index++) {
+        await callback(array[index], index, array);
+    }
 }
 
-async function createUpdateSaverRule(dId, status) {
+async function deleteAlarm(dId) {
+
+    try {
+
+        const rules = await EmqxRule.find({ dId: dId });
+
+
+        if (rules.length > 0) {
+            
+            asyncForEach(rules, async (rule) => {
+                console.log(rule)
+                const url = "http://localhost:8085/api/v4/rules/" + rule.id;
+                const res = await axios.delete(url, auth);
+                console.log(res.data)
+            });
+
+            
+            await EmqxRule.deleteMany({ dId: dId });
+
+        }
+
+        return "success";
+
+    } catch (error) {
+        return "error";
+    }
+
+}
+
+async function getAlarms(userId, dId) {
+    try {
+
+        const alarms = EmqxRule.find({ dId: dId });
+        return alarms;
+
+    } catch (error) {
+
+        return "error";
+        
+    }
+}
+
+async function createUpdateSaverRule(userId, dId, status) {
 
     //search for existing rule in mongo db- buscamos si hay una regla previa en mongo
-    const rule = await EmqxRule.findOne({ dId: dId });
+    const rule = await EmqxRule.findOne({ dId: dId, userId:userId, type: 'saver' });
 
     if (!rule) {
 
         try {
+
             const url = "http://localhost:8085/api/v4/rules";
 
-            const topic = dId + "/sdata";
+            const topic = userId + "/" + dId + "/sdata";
 
             //new rule -- preparamos nueva regla
             var newRule = {
@@ -41,13 +90,13 @@ async function createUpdateSaverRule(dId, status) {
                 actions: [{
                     name: "data_to_webserver",
                     params: {
-                        $resource: global.saverResource.id, 
+                        $resource: global.saverResource.id,
                         payload_tmpl: ""
                     }
                 }],
                 description: topic,
                 enabled: status
-            } 
+            }
 
             //save rule in emqx - grabamos la regla en emques
             const res = await axios.post(url, newRule, auth);
@@ -56,6 +105,7 @@ async function createUpdateSaverRule(dId, status) {
 
                 //save rule in mongo -- grabamos regla en mongo
                 EmqxRule.create({
+                    userId: userId,
                     dId: dId,
                     rawsql: res.data.data.rawsql,
                     id: res.data.data.id,
@@ -65,26 +115,158 @@ async function createUpdateSaverRule(dId, status) {
 
                 console.log("New Saver Rule Created...".green);
                 return "success";
-            }else{
+
+            } else {
+
                 console.log("Error creating emqx saver rule")
                 return "error";
+
             }
         } catch (error) {
+
             console.log(error);
             return "error";
+
         }
 
-    }else{
+    } else {
 
         // if rule already exists, update status rule  - si la regla existe actualizamos el estado de regla
         const url = "http://localhost:8085/api/v4/rules/" + rule.id;
 
         var newRule = {
             enabled: status
-        } 
+        }
 
-        const res = await axios.put(url, newRule ,auth);
-        return "updated"
+        const res = await axios.put(url, newRule, auth);
+
+        if (res.data.data) {
+
+            var toUpdate = {
+                $set: {
+                    status: status,
+                }
+            }
+
+            console.log(toUpdate);
+
+            await EmqxRule.updateOne({ id: res.data.data.id, userId:userId }, toUpdate);
+
+            return "updated"
+        } else {
+            return "error";
+        }
+
+
+    }
+
+
+}
+
+
+async function createUpdateAlarmRule(userId, dId, status, variable, condition, triggerTime, value) {
+
+    const topic = dId + "/sdata";
+    const rawsql = "SELECT payload as msg, topic as topic FROM \"" + topic + "\" WHERE msg.values." + variable + " " + condition + " " + value;
+
+
+    //search for existing rule in mongo db- buscamos si hay una regla previa en mongo
+    const rule = await EmqxRule.findOne({userId:userId, dId: dId, type: variable + "-alarm" });
+
+
+    if (!rule) {
+
+        try {
+
+            const url = "http://localhost:8085/api/v4/rules";
+
+
+            //new rule -- preparamos nueva regla
+            var newRule = {
+                rawsql: rawsql,
+                actions: [{
+                    name: "data_to_webserver",
+                    params: {
+                        $resource: global.alarmResource.id,
+                        payload_tmpl: ""
+                    }
+                }],
+                description: topic,
+                enabled: status
+            }
+
+            //save rule in emqx - grabamos la regla en emques
+            const res = await axios.post(url, newRule, auth);
+
+            if (res.data.data) {
+
+                //save rule in mongo -- grabamos regla en mongo
+                EmqxRule.create({
+                    userId: userId,
+                    dId: dId,
+                    rawsql: res.data.data.rawsql,
+                    id: res.data.data.id,
+                    description: res.data.data.description,
+                    type: variable + "-alarm",
+                    triggerTime: triggerTime,
+                    variable: variable,
+                    condition: condition,
+                    status: status,
+                    value: value
+                });
+
+                console.log("New " + variable + "-alarm Created...".green);
+                return "success";
+
+            } else {
+
+                console.log("Error creating  " + variable + "-alarm  rule")
+                return "error";
+
+            }
+        } catch (error) {
+
+            console.log(error);
+            return "error";
+
+        }
+
+    } else {
+
+        // if rule already exists, update status rule  - si la regla existe actualizamos el estado de regla
+        const url = "http://localhost:8085/api/v4/rules/" + rule.id;
+
+        var newRule = {
+            enabled: status,
+            rawsql: rawsql,
+        }
+
+        const res = await axios.put(url, newRule, auth);
+
+        if (res.data.data) {
+
+
+            console.log(res.data.data.id);
+
+            var toUpdate = {
+                $set: {
+                    rawsql: rawsql,
+                    variable: variable,
+                    status: status,
+                    value: value,
+                    triggerTime: triggerTime,
+                    condition: condition,
+                    value: value
+                }
+            }
+            console.log(toUpdate);
+            await EmqxRule.updateOne({ id: res.data.data.id, userId:userId }, toUpdate);
+
+            return "updated"
+
+        } else {
+            return "error";
+        }
 
     }
 
@@ -93,13 +275,17 @@ async function createUpdateSaverRule(dId, status) {
 
 
 
+
 router.get('/updateCreateRule', async (req, res) => {
 
 
-    var response = await createUpdateSaverRule("did", true);
+    //var response = await createUpdateAlarmRule("did", true, "temp", "=", 10, 22);
+    //var alarms = await getAlarms("did");
+    await deleteAlarm('did2')
 
     const r = {
-        status: response,
+        status: "success",
+
     }
 
     return res.json(r)
@@ -194,7 +380,7 @@ async function listResources() {
 
         console.log("***** Emqx webhooks resources count ok! *****".green);
 
- 
+
 
     } else {
 
