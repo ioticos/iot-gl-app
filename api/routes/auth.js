@@ -11,7 +11,7 @@ router.post('/login', async (req, res) => {
     try {
         const email = req.body.email.toLowerCase();
         const password = req.body.password;
-    
+        
         //looking for user with email ...
         var user = await User.findOne({ email: email });
         
@@ -33,11 +33,19 @@ router.post('/login', async (req, res) => {
 
             //Generating token
             const token = jwt.sign({userData: user}, 'securePasswordHere', { expiresIn: 60 * 60 * 24 * 30 }) // 30 days...
+
+            const mqttCredentials = await global.generateMqttCredentialsForUser(user._id);
+
+            user = user.toObject();
+            user.mqttUsername = mqttCredentials.mqttUsername;
+            user.mqttPassword = mqttCredentials.mqttPassword;
     
             const response = {
                 token: token,
-                userData: user
+                userData: user,
             }
+
+            console.log(response)
             
             return res.json(response);
     
@@ -53,6 +61,7 @@ router.post('/login', async (req, res) => {
     } catch (error) {
 
         console.log("Error in try catch auth.js /login".red);
+        console.log (error);
 
         const response = {
             status: "error",

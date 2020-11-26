@@ -39,7 +39,6 @@ export default {
   */
   plugins: [
     `~/plugins/dashboard-plugin.js`,
-    '~/plugins/mqtt.js'
   ],
   //autoimport
   components: true,
@@ -53,6 +52,7 @@ export default {
   modules: [
     '@nuxtjs/pwa',
     '@nuxtjs/axios',
+    'nuxt-highcharts',
   ],
 
   // Axios module configuration (https://go.nuxtjs.dev/config-axios)

@@ -6,6 +6,8 @@ const { checkAuth } = require('../middlewares/authentication.js');
 import Device from '../models/device.js';
 
 
+
+
 router.post('/select-device', checkAuth, async (req, res) => {
 
   try {
@@ -36,7 +38,6 @@ router.post('/select-device', checkAuth, async (req, res) => {
 
 });
 
-
 router.post('/get-devices', checkAuth, async (req, res) => {
 
   try {
@@ -44,7 +45,26 @@ router.post('/get-devices', checkAuth, async (req, res) => {
     const userId = req.userData._id;
 
 
-    const devices = await Device.find({ userId: userId });
+    //buscamos los dispositivos
+    var devices = await Device.find({ userId: userId });
+
+    devices = JSON.parse(JSON.stringify(devices));
+
+    //buscamos las saverrules
+    const saverRules = await global.getSaverRules(userId);
+
+    //buscamos las alarmRules
+    const alarmRules = await global.getAlarmRules(userId);
+
+    
+
+    //vamos a incluir savers rules en devices
+    devices.forEach((device, index)=> {
+        devices[index].saverRule = saverRules.filter(saverRule => saverRule.dId == device.dId);
+        devices[index].alarmRules = alarmRules.filter(alarmRule => alarmRule.dId == device.dId);
+    });
+
+    console.log(devices);
 
     const response = {
       status: "success",
@@ -54,12 +74,11 @@ router.post('/get-devices', checkAuth, async (req, res) => {
     return res.json(response);
 
   } catch (error) {
-
+console.log(error);
     const response = {
       status: "error",
       error: error
     }
-
 
     return res.json(response);
 
@@ -71,42 +90,24 @@ router.post('/new-device', checkAuth, async (req, res) => {
 
   try {
 
-    const dId = req.body.dId;
-    const name = req.body.name;
-    const userId = req.userData._id;
-    const analogValue = 0;
-    const time = Date.now();
-    const selected = false;
-    const alarms = {
-      temp: {
-        value: 0,
-        act: false,
-      },
-      hum: {
-        value: 0,
-        act: false,
-      },
-      light: {
-        value: 0,
-        act: false,
-      },
-    }
-
-
     const newDevice = await Device.create({
-      dId: dId,
-      name: name,
-      userId: userId,
-      alarms: alarms,
-      analogValue: analogValue,
-      time: time,
-      selected: selected
+      userId: req.userData._id,
+      dId: req.body.dId,
+      name: req.body.name,
+      selected: true ,
+      analogValue: 0,
+      time: Date.now()
     });
 
+    //generamos saver rule
+    await global.createSaverRule(newDevice.userId, newDevice.dId, true);
+
+    //generamos credenciales mqtt para le device
+    await global.generateMqttCredentialsForDevice(newDevice.userId, newDevice.dId);
 
     //dejamos el recien creado como seleccionado
-    await Device.updateMany({ userId: userId }, { selected: false }); //todos a false
-    await Device.updateOne({ userId: userId, dId: dId }, { selected: true }) //solo el reciente a true
+    await Device.updateMany({ userId: newDevice.userId }, { selected: false }); //todos a false
+    await Device.updateOne({ userId: newDevice.userId, dId: newDevice.dId }, { selected: true }) //solo el reciente a true
 
     const response = {
       status: "success",
@@ -135,6 +136,16 @@ router.post('/delete-device', checkAuth, async (req, res) => {
     const dId = req.body.dId;
 
     await Device.deleteOne({ userId: userId, dId: dId });
+
+
+    //borramos reglas saver del device
+    await global.deleteSaverRule(dId);
+
+    //borramos reglas alarm del device
+    await global.deleteAllAlarmRules(userId, dId)
+
+    //borramos credenciales mqtt del dispositivo
+    await global.deleteMqttDeviceCredentials(dId);
 
 
     //traigo los devices despues de la eliminación

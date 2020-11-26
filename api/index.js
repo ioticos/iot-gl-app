@@ -22,6 +22,7 @@ app.use('/api', require('./routes/auth.js'));
 app.use('/api', require('./routes/devices.js'));
 app.use('/api', require('./routes/alarms.js'));
 app.use('/api', require('./routes/emqxapi.js'));
+app.use('/api', require('./routes/dataprovider.js'));
 
 // Export express app
 module.exports = app
